@@ -1349,15 +1349,21 @@ SharedGopStore.create()
 **Core APIs**
 
 - {py:class}`~accvlab.on_demand_video_decoder.SharedGopStore`: Cross-process shared memory GOP cache
-  - `create(capacity, store_id)`: Allocate a new store (main process)
-  - `attach(capacity, store_id)`: Attach to existing store (worker processes)
-  - `lookup(video_path, frame_id)`: Lock-free cache lookup, returns `GopRef` or `None`
-  - `put(video_path, first_frame_id, gop_len, data)`: Store GOP data, returns `GopRef`
-  - `get_batch(refs)`: Read a batch of `GopRef` as zero-copy numpy views (main process)
-  - `read(ref)`: Read a single `GopRef` as a zero-copy numpy view
-  - `cleanup()`: Unlink all shared memory blocks (main process, on shutdown)
-  - `close()`: Close handles without unlinking (worker processes, before exit)
-- {py:class}`~accvlab.on_demand_video_decoder.GopRef`: Lightweight, picklable reference to GOP data in 
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.create`: Allocate a new store (main process)
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.attach`: Attach to existing store (worker processes)
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.lookup`: Lock-free cache lookup, returns
+    {py:class}`~accvlab.on_demand_video_decoder.GopRef` or ``None``
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.put`: Store GOP data, returns
+    {py:class}`~accvlab.on_demand_video_decoder.GopRef`
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.get_batch`: Read a batch of
+    {py:class}`~accvlab.on_demand_video_decoder.GopRef` as zero-copy numpy views (main process)
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.read`: Read a single
+    {py:class}`~accvlab.on_demand_video_decoder.GopRef` as a zero-copy numpy view
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.cleanup`: Unlink all shared memory blocks
+    (main process, on shutdown)
+  - {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.close`: Close handles without unlinking
+    (worker processes, before exit)
+- {py:class}`~accvlab.on_demand_video_decoder.GopRef`: Lightweight, picklable reference to GOP data in
   shared memory (passed through DataLoader IPC queue)
 
 **Code Walkthrough**
@@ -1397,7 +1403,9 @@ def worker_fn(store_id, capacity, tasks, result_queue):
 **Step 3: Main process reads zero-copy data and decodes**
 
 ```python
-# Collect refs from all workers
+# `queue_a` and `queue_b` are the IPC queues belonging to two separate
+# DataLoader workers spawned in Step 2. Each worker pushes its own list
+# of GopRefs onto its own queue; the main process gathers them here.
 all_refs = queue_a.get() + queue_b.get()
 
 # Read shared memory blocks as zero-copy numpy views
@@ -1428,15 +1436,15 @@ A recommended formula is:
 capacity = batch_size * num_cameras * 10
 ```
 
-If capacity is too small, GOPs may be evicted before the main process can read them. In this case, 
-`read()` returns a zeros array and emits a `RuntimeWarning` with diagnostic information instead of 
-crashing.
+If capacity is too small, GOPs may be evicted before the main process can read them. In this case,
+{py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.read` returns a zeros array and emits a
+`RuntimeWarning` with diagnostic information instead of crashing.
 
 **GopRef IPC Efficiency**
 
-`GopRef` is a `NamedTuple` with 4 fields (shm_name, data_size, first_frame_id, gop_len). It serializes 
-to ~60 bytes via pickle, compared to ~4-40 KB for the actual GOP packet data. This makes DataLoader IPC 
-overhead negligible.
+{py:class}`~accvlab.on_demand_video_decoder.GopRef` is a `NamedTuple` with 4 fields (shm_name, data_size,
+first_frame_id, gop_len). It serializes to ~60 bytes via pickle, compared to ~4-40 KB for the actual GOP
+packet data. This makes DataLoader IPC overhead negligible.
 
 ```python
 import pickle
@@ -1448,15 +1456,18 @@ print(len(pickle.dumps(ref)))  # ~60 bytes
 
 **LRU Eviction**
 
-When the store is full, `put()` evicts the least-recently-used entry (lowest `access_tick`). Both 
-`lookup()` and `put()` refresh an entry's tick, so frequently accessed GOPs are retained. Evicted shm 
-blocks are cleaned up during the next `get_batch()` call.
+When the store is full, {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.put` evicts the
+least-recently-used entry (lowest `access_tick`). Both
+{py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.lookup` and
+{py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.put` refresh an entry's tick, so frequently
+accessed GOPs are retained. Evicted shm blocks are cleaned up during the next
+{py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.get_batch` call.
 
 **Cross-Process Safety**
 
-- `lookup()` is lock-free (worst case: stale miss, one extra disk read)
-- `put()` acquires an `flock` for atomicity (double-check after acquiring the lock)
-- `get_batch()` acquires an `flock` to prevent eviction while opening handles
+- {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.lookup` is lock-free (worst case: stale miss, one extra disk read)
+- {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.put` acquires an `flock` for atomicity
+- {py:meth}`~accvlab.on_demand_video_decoder.SharedGopStore.get_batch` acquires an `flock` to prevent eviction while opening handles
 - Works with `spawn`'d DataLoader workers (unlike `multiprocessing.Lock`)
 
 **Running the Sample**

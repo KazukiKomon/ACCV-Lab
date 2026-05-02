@@ -125,7 +125,15 @@ def SampleSharedGopStore():
     store = SharedGopStore.create(capacity=CAPACITY, store_id=STORE_ID)
 
     # ── 2. Prepare tasks (simulating a batch of 6 cameras × 2 samples) ──
-    # Each task: (video_path, target_frame_id, gop_first_frame, gop_len)
+    # Each task tuple: (video_path, target_frame_id, gop_first_frame, gop_len).
+    #
+    # In a real pipeline, `gop_first_frame` and `gop_len` would come from a
+    # demuxer that has parsed the video index — for example, the GOP boundary
+    # containing `target_frame_id` returned by `GetGOPList` /
+    # `OnDemandVideoDecoder`. See `samples/SampleSeparationAccessGOPListAPI.py`
+    # for an end-to-end example of obtaining `first_frame_ids` and `gop_lens`
+    # from real videos. Here we hard-code 30-frame GOPs starting at frame 0
+    # to keep this demo CPU-only and free of video-file dependencies.
     tasks_a = [
         ("/data/video/cam0.mp4", 15, 0, 30),
         ("/data/video/cam1.mp4", 15, 0, 30),

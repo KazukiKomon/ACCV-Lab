@@ -543,5 +543,30 @@ class TestStats:
         assert stats['pool_usage'] == "1/8"
 
 
+# ---------------------------------------------------------------------------
+# Factory enforcement (direct construction must be blocked)
+# ---------------------------------------------------------------------------
+
+
+class TestFactoryEnforcement:
+    """Direct __init__ calls must raise; only create()/attach() are valid."""
+
+    def test_direct_construction_raises(self, store_id):
+        """SharedGopStore(...) without the private key must raise RuntimeError."""
+        with pytest.raises(RuntimeError, match="cannot be instantiated directly"):
+            SharedGopStore(capacity=4, store_id=store_id, _create=True)
+
+    def test_direct_construction_error_mentions_factories(self, store_id):
+        """Error message must point users to create() and attach()."""
+        with pytest.raises(RuntimeError, match=r"create\(\).*attach\(\)"):
+            SharedGopStore(capacity=4, store_id=store_id, _create=True)
+
+    def test_direct_construction_does_not_allocate_shm(self, store_id):
+        """A blocked construction must reject before touching shm."""
+        with pytest.raises(RuntimeError):
+            SharedGopStore(capacity=4, store_id=store_id, _create=True)
+        assert _shm_files_for_store(store_id) == [], "shm leaked despite blocked construction"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

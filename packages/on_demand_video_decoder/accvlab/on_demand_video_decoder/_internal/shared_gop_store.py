@@ -15,9 +15,10 @@
 """
 SharedGopStore: Cross-process shared GOP store backed by POSIX SharedMemory.
 
-Workers ``put()`` GOP packet data and pass lightweight :class:`GopRef`
-references through the DataLoader IPC queue.  The main process
-``get_batch()`` to read references as zero-copy numpy views.
+Workers :meth:`SharedGopStore.put` GOP packet data and pass lightweight
+:class:`GopRef` references through the DataLoader IPC queue.  The main
+process calls :meth:`SharedGopStore.get_batch` to read references as
+zero-copy numpy views.
 
 Synchronization uses file-based locking (``flock``) which works across
 ``spawn``'d DataLoader workers (unlike ``multiprocessing.Lock``).
@@ -77,6 +78,10 @@ _STATE_USED = np.uint8(1)
 # SharedMemory name prefix used for GOP data blocks.
 _SHM_PREFIX = "gs"
 
+# Private key to prevent direct instantiation of SharedGopStore.
+# Mirrors the pattern used by ``CachedGopDecoder`` in ``_internal/decoder.py``.
+_CREATION_KEY = object()
+
 
 def _hash_video_path(video_path: str) -> np.uint64:
     """Deterministic uint64 hash for a video path string.
@@ -105,13 +110,29 @@ class SharedGopStore:
 
     A recommended formula is ``batch_size * num_cameras * 10``.
 
+    Note:
+        Do not instantiate this class directly.
+        Use :meth:`create` (main process, before spawning workers) or
+        :meth:`attach` (worker processes) instead — these factories
+        manage shared-memory creation and tear-down correctly.
+
     Args:
         capacity: Maximum number of GOPs to cache.
         store_id: Unique identifier (typically ``LOCAL_RANK``).
         _create: Internal flag -- use :meth:`create` / :meth:`attach`.
+
+    Raises:
+        RuntimeError: If called directly instead of via :meth:`create` /
+            :meth:`attach`.
     """
 
-    def __init__(self, capacity: int, store_id: int, _create: bool):
+    def __init__(self, capacity: int, store_id: int, _create: bool, *, _key=None):
+        if _key is not _CREATION_KEY:
+            raise RuntimeError(
+                "SharedGopStore cannot be instantiated directly. "
+                "Use SharedGopStore.create() (main process) or "
+                "SharedGopStore.attach() (workers) instead."
+            )
         self.capacity = capacity
         self.store_id = store_id
         self._is_creator = _create
@@ -173,7 +194,7 @@ class SharedGopStore:
             capacity: Max number of GOPs to cache.
             store_id: Unique identifier (typically ``LOCAL_RANK``).
         """
-        return cls(capacity=capacity, store_id=store_id, _create=True)
+        return cls(capacity=capacity, store_id=store_id, _create=True, _key=_CREATION_KEY)
 
     @classmethod
     def attach(cls, capacity: int, store_id: int = 0) -> 'SharedGopStore':
@@ -182,7 +203,7 @@ class SharedGopStore:
         Raises:
             FileNotFoundError: If the store has not been created yet.
         """
-        return cls(capacity=capacity, store_id=store_id, _create=False)
+        return cls(capacity=capacity, store_id=store_id, _create=False, _key=_CREATION_KEY)
 
     # ------------------------------------------------------------------ #
     #  Locking helpers (flock)
