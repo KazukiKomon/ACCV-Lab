@@ -16,15 +16,9 @@
  
 #pragma once
 
-#include <algorithm>
-#include <cerrno>
-#include <cstdlib>
-#include <cstring>
-#include <memory>
-#include <vector>
-
 extern "C" {
 #include <fcntl.h>
+#include <cstdlib>
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
 #include <libavcodec/avcodec.h>
@@ -35,6 +29,11 @@ extern "C" {
 #include <libavcodec/bsf.h>
 #endif
 }
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <memory>
+#include <vector>
 #include "cuviddec.h"
 #include "nvcuvid.h"
 #include "NvCodecUtils.h"
@@ -487,6 +486,10 @@ class FFmpegDemuxer {
        public:
         virtual ~DataProvider() {}
         virtual int GetData(uint8_t* pBuf, int nBuf) = 0;
+    };
+
+    class SeekableDataProvider : public DataProvider {
+       public:
         virtual int64_t Seek(int64_t offset, int whence) {
             if (whence == AVSEEK_SIZE) {
                 return Size();
@@ -497,7 +500,7 @@ class FFmpegDemuxer {
         virtual bool IsSeekable() const { return Size() >= 0; }
     };
 
-    class MemoryDataProvider : public DataProvider {
+    class MemoryDataProvider : public SeekableDataProvider {
        public:
         explicit MemoryDataProvider(std::shared_ptr<const std::vector<uint8_t>> data)
             : data_(std::move(data)), pos_(0) {}
@@ -798,14 +801,16 @@ class FFmpegDemuxer {
             LOG(ERROR) << "FFmpeg error: " << __FILE__ << " " << __LINE__;
             return NULL;
         }
-        int64_t (*seek_cb)(void*, int64_t, int) = pDataProvider->IsSeekable() ? &SeekPacket : NULL;
+        SeekableDataProvider* pSeekableDataProvider = dynamic_cast<SeekableDataProvider*>(pDataProvider);
+        int64_t (*seek_cb)(void*, int64_t, int) =
+            pSeekableDataProvider && pSeekableDataProvider->IsSeekable() ? &SeekPacket : NULL;
         avioc = avio_alloc_context(avioc_buffer, avioc_buffer_size, 0, pDataProvider, &ReadPacket, NULL,
                                    seek_cb);
         if (!avioc) {
             LOG(ERROR) << "FFmpeg error: " << __FILE__ << " " << __LINE__;
             return NULL;
         }
-        if (pDataProvider->IsSeekable()) {
+        if (pSeekableDataProvider && pSeekableDataProvider->IsSeekable()) {
             avioc->seekable = AVIO_SEEKABLE_NORMAL;
         }
         ctx->pb = avioc;
@@ -1346,7 +1351,8 @@ class FFmpegDemuxer {
     }
 
     static int64_t SeekPacket(void* opaque, int64_t offset, int whence) {
-        return ((DataProvider*)opaque)->Seek(offset, whence);
+        auto* provider = dynamic_cast<SeekableDataProvider*>((DataProvider*)opaque);
+        return provider ? provider->Seek(offset, whence) : AVERROR(ENOSYS);
     }
 };
 

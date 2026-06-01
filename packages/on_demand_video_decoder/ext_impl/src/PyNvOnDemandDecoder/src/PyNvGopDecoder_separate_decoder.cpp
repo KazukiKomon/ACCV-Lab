@@ -153,8 +153,7 @@ SerializedPacketBundle PyNvGopDecoder::get_gop(const std::vector<std::string>& f
 }
 
 SerializedPacketBundle PyNvGopDecoder::get_gop_from_bytes(
-    std::shared_ptr<const std::vector<uint8_t>> data, const std::vector<int> frame_ids,
-    const std::string& source_name) {
+    std::shared_ptr<const std::vector<uint8_t>> data, const std::vector<int> frame_ids) {
     nvtxRangePushA("GetGOPFromBytes");
 
     if (!data || data->empty()) {
@@ -188,12 +187,11 @@ SerializedPacketBundle PyNvGopDecoder::get_gop_from_bytes(
 
     nvtxRangePushA("Initialize memory demuxers");
     for (size_t i = 0; i < total_frames; ++i) {
-        std::string per_frame_source = source_name + "#" + std::to_string(i);
-        demuxers[i].reset(new PyNvGopDemuxer(per_frame_source, data));
+        demuxers[i].reset(new PyNvGopDemuxer("memory://video", data));
         if (!demuxers[i]->IsValid()) {
             nvtxRangePop();  // Initialize memory demuxers
             nvtxRangePop();  // GetGOPFromBytes
-            throw std::runtime_error("[ERROR] create memory demuxer failed: " + per_frame_source);
+            throw std::runtime_error("[ERROR] create memory demuxer failed");
         }
     }
     nvtxRangePop();  // Initialize memory demuxers

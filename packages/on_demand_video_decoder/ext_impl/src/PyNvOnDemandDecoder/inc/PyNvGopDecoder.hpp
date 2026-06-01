@@ -106,8 +106,7 @@ class PyNvGopDecoder {
                                    const FastStreamInfo* fastStreamInfos = nullptr);
 
     SerializedPacketBundle get_gop_from_bytes(std::shared_ptr<const std::vector<uint8_t>> data,
-                                              const std::vector<int> frame_ids,
-                                              const std::string& source_name = "memory://video");
+                                              const std::vector<int> frame_ids);
 
     /**
      * Extract GOP data for multiple videos and return them as separate bundles

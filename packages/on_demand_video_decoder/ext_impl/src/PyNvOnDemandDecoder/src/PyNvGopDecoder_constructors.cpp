@@ -35,23 +35,29 @@
 namespace fs = std::filesystem;
 
 namespace {
-std::shared_ptr<std::vector<uint8_t>> CopyByteBuffer(const py::buffer& buffer) {
+py::buffer_info RequestByteBuffer(const py::buffer& buffer, const std::string& arg_name) {
     py::buffer_info info = buffer.request();
     if (info.itemsize != 1) {
-        throw std::invalid_argument("video_bytes must expose a byte-sized buffer");
+        throw std::invalid_argument(arg_name + " must expose a byte-sized buffer");
     }
     if (info.ndim > 1) {
-        throw std::invalid_argument("video_bytes must be a contiguous 1D bytes-like object");
+        throw std::invalid_argument(arg_name + " must be a contiguous 1D bytes-like object");
     }
     if (info.ndim == 1 && !info.strides.empty() && info.strides[0] != 1) {
-        throw std::invalid_argument("video_bytes must be contiguous");
+        throw std::invalid_argument(arg_name + " must be contiguous");
     }
 
+    const size_t data_size = static_cast<size_t>(info.size) * static_cast<size_t>(info.itemsize);
+    if (data_size == 0) {
+        throw std::invalid_argument(arg_name + " must not be empty");
+    }
+    return info;
+}
+
+std::shared_ptr<std::vector<uint8_t>> CopyByteBuffer(const py::buffer& buffer) {
+    py::buffer_info info = RequestByteBuffer(buffer, "video_bytes");
     const auto* src = static_cast<const uint8_t*>(info.ptr);
     auto data = std::make_shared<std::vector<uint8_t>>(src, src + info.size * info.itemsize);
-    if (data->empty()) {
-        throw std::invalid_argument("video_bytes must not be empty");
-    }
     return data;
 }
 }  // namespace
@@ -517,13 +523,13 @@ void Init_PyNvGopDecoder(py::module& m) {
                     auto data = CopyByteBuffer(video_bytes);
                     SerializedPacketBundle serialized_data;
                     std::vector<RGBFrame> result;
-                    std::vector<std::string> source_names(frame_ids.size(), "memory://video");
+                    std::vector<std::string> filepaths(frame_ids.size(), "memory://video");
 
                     {
                         py::gil_scoped_release release;
-                        serialized_data = dec->get_gop_from_bytes(data, frame_ids, "memory://video");
+                        serialized_data = dec->get_gop_from_bytes(data, frame_ids);
                         dec->decode_from_gop(serialized_data.data.get(), serialized_data.size,
-                                             source_names, frame_ids, true, as_bgr, nullptr, &result);
+                                             filepaths, frame_ids, true, as_bgr, nullptr, &result);
                     }
                     return result;
                 } catch (const std::exception& e) {
@@ -615,7 +621,7 @@ void Init_PyNvGopDecoder(py::module& m) {
                     SerializedPacketBundle serialized_data;
                     {
                         py::gil_scoped_release release;
-                        serialized_data = dec->get_gop_from_bytes(data, frame_ids, "memory://video");
+                        serialized_data = dec->get_gop_from_bytes(data, frame_ids);
                     }
 
                     auto capsule = py::capsule(serialized_data.data.release(),
