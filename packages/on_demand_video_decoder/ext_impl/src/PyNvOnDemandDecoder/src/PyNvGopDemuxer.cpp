@@ -37,6 +37,15 @@ PyNvGopDemuxer::PyNvGopDemuxer(const std::string& filePath, const FastStreamInfo
     nvtxRangePop();
 }
 
+PyNvGopDemuxer::PyNvGopDemuxer(const std::string& sourceName,
+                               std::shared_ptr<const std::vector<uint8_t>> memoryData) {
+    nvtxRangePushA("FFmpegDemuxer_Create_FromMemory");
+    auto provider = std::make_shared<FFmpegDemuxer::MemoryDataProvider>(std::move(memoryData));
+    demuxer.reset(new FFmpegDemuxer(std::move(provider)));
+    this->filename = sourceName;
+    nvtxRangePop();
+}
+
 // Frame and PTS mapping methods
 void PyNvGopDemuxer::set_pts_frameid_mapping(std::map<int, int64_t>&& frame2pts,
                                              std::map<int64_t, int>&& pts2frame) {

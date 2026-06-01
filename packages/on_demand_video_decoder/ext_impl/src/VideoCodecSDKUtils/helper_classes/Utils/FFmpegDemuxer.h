@@ -16,9 +16,15 @@
  
 #pragma once
 
+#include <algorithm>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <vector>
+
 extern "C" {
 #include <fcntl.h>
-#include <cstdlib>
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
 #include <libavcodec/avcodec.h>
@@ -481,9 +487,74 @@ class FFmpegDemuxer {
        public:
         virtual ~DataProvider() {}
         virtual int GetData(uint8_t* pBuf, int nBuf) = 0;
+        virtual int64_t Seek(int64_t offset, int whence) {
+            if (whence == AVSEEK_SIZE) {
+                return Size();
+            }
+            return AVERROR(ENOSYS);
+        }
+        virtual int64_t Size() const { return -1; }
+        virtual bool IsSeekable() const { return Size() >= 0; }
+    };
+
+    class MemoryDataProvider : public DataProvider {
+       public:
+        explicit MemoryDataProvider(std::shared_ptr<const std::vector<uint8_t>> data)
+            : data_(std::move(data)), pos_(0) {}
+
+        int GetData(uint8_t* pBuf, int nBuf) override {
+            if (!data_ || nBuf <= 0 || pos_ >= static_cast<int64_t>(data_->size())) {
+                return AVERROR_EOF;
+            }
+            int64_t remaining = static_cast<int64_t>(data_->size()) - pos_;
+            int bytes_to_copy = static_cast<int>(std::min<int64_t>(remaining, nBuf));
+            std::memcpy(pBuf, data_->data() + pos_, bytes_to_copy);
+            pos_ += bytes_to_copy;
+            return bytes_to_copy;
+        }
+
+        int64_t Seek(int64_t offset, int whence) override {
+            if (!data_) {
+                return AVERROR(EINVAL);
+            }
+            if (whence == AVSEEK_SIZE) {
+                return static_cast<int64_t>(data_->size());
+            }
+
+            int64_t new_pos = 0;
+            switch (whence) {
+                case SEEK_SET:
+                    new_pos = offset;
+                    break;
+                case SEEK_CUR:
+                    new_pos = pos_ + offset;
+                    break;
+                case SEEK_END:
+                    new_pos = static_cast<int64_t>(data_->size()) + offset;
+                    break;
+                default:
+                    return AVERROR(EINVAL);
+            }
+
+            if (new_pos < 0 || new_pos > static_cast<int64_t>(data_->size())) {
+                return AVERROR(EINVAL);
+            }
+            pos_ = new_pos;
+            return pos_;
+        }
+
+        int64_t Size() const override {
+            return data_ ? static_cast<int64_t>(data_->size()) : -1;
+        }
+
+       private:
+        std::shared_ptr<const std::vector<uint8_t>> data_;
+        int64_t pos_;
     };
 
    private:
+    std::shared_ptr<DataProvider> dataProvider = nullptr;
+
     void init(AVFormatContext* fmtc_, int64_t timeScale = 1000 /*Hz*/, const FastStreamInfo* fastStreamInfo = nullptr) {
         if (!fmtc_) {
             LOG(ERROR) << "No AVFormatContext provided.";
@@ -693,7 +764,8 @@ class FFmpegDemuxer {
 
         /* Some inputs doesn't allow seek functionality.
         * Check this ahead of time. */
-        is_seekable = fmtc->iformat->read_seek || fmtc->iformat->read_seek2;
+        bool avio_seekable = !fmtc->pb || (fmtc->pb->seekable & AVIO_SEEKABLE_NORMAL);
+        is_seekable = (fmtc->iformat->read_seek || fmtc->iformat->read_seek2) && avio_seekable;
     }
 
     /**
@@ -726,11 +798,15 @@ class FFmpegDemuxer {
             LOG(ERROR) << "FFmpeg error: " << __FILE__ << " " << __LINE__;
             return NULL;
         }
-        avioc =
-            avio_alloc_context(avioc_buffer, avioc_buffer_size, 0, pDataProvider, &ReadPacket, NULL, NULL);
+        int64_t (*seek_cb)(void*, int64_t, int) = pDataProvider->IsSeekable() ? &SeekPacket : NULL;
+        avioc = avio_alloc_context(avioc_buffer, avioc_buffer_size, 0, pDataProvider, &ReadPacket, NULL,
+                                   seek_cb);
         if (!avioc) {
             LOG(ERROR) << "FFmpeg error: " << __FILE__ << " " << __LINE__;
             return NULL;
+        }
+        if (pDataProvider->IsSeekable()) {
+            avioc->seekable = AVIO_SEEKABLE_NORMAL;
         }
         ctx->pb = avioc;
 
@@ -755,9 +831,18 @@ class FFmpegDemuxer {
    public:
     FFmpegDemuxer(const char *szFilePath, int64_t timescale = 1000 /*Hz*/) : FFmpegDemuxer(CreateFormatContext(szFilePath), timescale) {}
     FFmpegDemuxer(const char *szFilePath, const FastStreamInfo* fastStreamInfo, int64_t timescale = 1000 /*Hz*/) : FFmpegDemuxer(CreateFormatContext(szFilePath), fastStreamInfo, timescale) {}
-    
+
     FFmpegDemuxer(DataProvider* pDataProvider) : FFmpegDemuxer(CreateFormatContext(pDataProvider)) {
         avioc = fmtc->pb;
+    }
+
+    FFmpegDemuxer(std::shared_ptr<DataProvider> pDataProvider, int64_t timescale = 1000 /*Hz*/) {
+        dataProvider = std::move(pDataProvider);
+        AVFormatContext* ctx = CreateFormatContext(dataProvider.get());
+        avioc = ctx ? ctx->pb : nullptr;
+        nvtxRangePushA("init");
+        init(ctx, timescale);
+        nvtxRangePop();
     }
 
     FFmpegDemuxer(const char* szFilePath, int buf_size /*512*1024*/, int64_t timescale = 1000) {
@@ -1258,6 +1343,10 @@ class FFmpegDemuxer {
 
     static int ReadPacket(void* opaque, uint8_t* pBuf, int nBuf) {
         return ((DataProvider*)opaque)->GetData(pBuf, nBuf);
+    }
+
+    static int64_t SeekPacket(void* opaque, int64_t offset, int whence) {
+        return ((DataProvider*)opaque)->Seek(offset, whence);
     }
 };
 
