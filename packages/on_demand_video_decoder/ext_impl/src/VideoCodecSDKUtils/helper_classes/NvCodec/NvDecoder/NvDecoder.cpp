@@ -382,17 +382,6 @@ int NvDecoder::HandleVideoSequence(CUVIDEOFORMAT *pVideoFormat)
     }
     
     CUDA_DRVAPI_CALL(cuCtxPopCurrent(NULL));
-    uint8_t* pFrame[8] = { NULL };
-    if (m_bUseDeviceFrame)
-        {
-            if (m_bEnableAsyncAllocations)
-            {
-                for (size_t i = 0; i < 8; i++)
-                {
-                    CUDA_DRVAPI_CALL(cuMemAllocAsync((CUdeviceptr*)&pFrame[i], GetFrameSize(), m_cuvidStream));
-                }
-            }
-        }
     // STOP_TIMER("Session Initialization Time: ");
     // NvDecoder::addDecoderSessionOverHead(getDecoderSessionID(), elapsedTime);
     return nDecodeSurface;
@@ -515,18 +504,6 @@ int NvDecoder::ReconfigureDecoder(CUVIDEOFORMAT *pVideoFormat)
             }
         }
     }
-    //recreate new buffers
-    uint8_t* pFrame[8] = { NULL };
-    if (m_bUseDeviceFrame)
-        {
-            if (m_bEnableAsyncAllocations)
-            {
-                for (size_t i = 0; i < 8; i++)
-                {
-                    CUDA_DRVAPI_CALL(cuMemAllocAsync((CUdeviceptr*)&pFrame[i], GetFrameSize(), m_cuvidStream));
-                }
-            }
-        }
     CUDA_DRVAPI_CALL(cuCtxPopCurrent(NULL));
     STOP_TIMER("Session Reconfigure Time: ");
 
